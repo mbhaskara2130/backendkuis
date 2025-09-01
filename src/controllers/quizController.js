@@ -58,29 +58,58 @@ export async function getQuestions(req,res){
     const { id } = req.params
     const quiz = await db.get('SELECT id FROM quizzes WHERE id=?', [id])
     if(!quiz) return res.status(404).json({ error: 'quiz not found' })
-    const rows = await db.all('SELECT id, text, options_json FROM questions WHERE quiz_id=? ORDER BY id ASC', [id])
-    const data = rows.map(r=>({ id:r.id, text:r.text, options: JSON.parse(r.options_json) }))
+
+    const rows = await db.all(
+      'SELECT id, text, options_json, correct_index FROM questions WHERE quiz_id=? ORDER BY id ASC',
+      [id]
+    )
+
+    const data = rows.map(r=>({
+      id: r.id,
+      text: r.text,
+      options: JSON.parse(r.options_json),
+      correct_index: r.correct_index
+    }))
+
     res.json(data)
   }catch(e){
     res.status(500).json({ error: e.message })
   }
 }
 
+
 export async function addQuestion(req,res){
   try{
     const db = getDb()
     const { id } = req.params
     const { text, options, correct_index } = req.body || {}
+
     if(!text || !Array.isArray(options) || options.length<2 || correct_index===undefined)
       return res.status(400).json({ error: 'text, options[], correct_index required' })
+
     const quiz = await db.get('SELECT id FROM quizzes WHERE id=?', [id])
     if(!quiz) return res.status(404).json({ error: 'quiz not found' })
-    const r = await db.run('INSERT INTO questions (quiz_id, text, options_json, correct_index) VALUES (?,?,?,?)', [id, text, JSON.stringify(options), Number(correct_index)])
-    res.status(201).json({ id: r.lastID })
+
+    const r = await db.run(
+      'INSERT INTO questions (quiz_id, text, options_json, correct_index) VALUES (?,?,?,?)',
+      [id, text, JSON.stringify(options), Number(correct_index)]
+    )
+
+    const newQ = await db.get(
+      'SELECT id, text, options_json, correct_index FROM questions WHERE id=?',
+      [r.lastID]
+    )
+    res.status(201).json({
+      id: newQ.id,
+      text: newQ.text,
+      options: JSON.parse(newQ.options_json),
+      correct_index: newQ.correct_index
+    })
   }catch(e){
     res.status(500).json({ error: e.message })
   }
 }
+
 
 export async function updateQuestion(req,res){
   try{
@@ -88,16 +117,32 @@ export async function updateQuestion(req,res){
     const { qid } = req.params
     const row = await db.get('SELECT * FROM questions WHERE id=?', [qid])
     if(!row) return res.status(404).json({ error: 'question not found' })
+
     let { text, options, correct_index } = req.body || {}
     const newText = text ?? row.text
     const newOpts = options ? JSON.stringify(options) : row.options_json
     const newIdx = (correct_index===undefined) ? row.correct_index : Number(correct_index)
-    await db.run('UPDATE questions SET text=?, options_json=?, correct_index=? WHERE id=?', [newText, newOpts, newIdx, qid])
-    res.json({ id: Number(qid) })
+
+    await db.run(
+      'UPDATE questions SET text=?, options_json=?, correct_index=? WHERE id=?',
+      [newText, newOpts, newIdx, qid]
+    )
+
+    const updated = await db.get(
+      'SELECT id, text, options_json, correct_index FROM questions WHERE id=?',
+      [qid]
+    )
+    res.json({
+      id: updated.id,
+      text: updated.text,
+      options: JSON.parse(updated.options_json),
+      correct_index: updated.correct_index
+    })
   }catch(e){
     res.status(500).json({ error: e.message })
   }
 }
+
 
 export async function deleteQuestion(req,res){
   try{

@@ -1,47 +1,111 @@
 import { getDb } from '../config/db.js'
 
-export async function leaderboard(req,res){
-  try{
+// Leaderboard list
+// Leaderboard list (best score per user + quiz name)
+export async function leaderboard(req, res) {
+  try {
     const db = getDb()
     const { quizId } = req.query
     const args = []
-    let sql = `
-      SELECT a.id as attempt_id,
-             COALESCE(u.username, a.guest_name) as name,
-             a.score,
-             a.created_at
-      FROM attempts a
-      LEFT JOIN users u ON u.id = a.user_id
+
+    const sql = `
+      WITH best_attempt AS (
+        SELECT a.user_id, a.quiz_id, MAX(a.score) AS best_score
+        FROM attempts a
+        ${quizId ? 'WHERE a.quiz_id = ?' : ''}
+        GROUP BY a.user_id ${quizId ? ', a.quiz_id' : ''}
+      )
+      SELECT u.username,
+             q.title AS best_quiz,
+             b.best_score
+      FROM best_attempt b
+      JOIN users u ON u.id = b.user_id
+      JOIN quizzes q ON q.id = b.quiz_id
+      ORDER BY b.best_score DESC, u.username ASC
+      LIMIT 100
     `
-    if(quizId){
-      sql += ' WHERE a.quiz_id = ? '
-      args.push(quizId)
-    }
-    sql += ' ORDER BY a.score DESC, a.created_at ASC LIMIT 100'
+    if (quizId) args.push(quizId)
+
     const rows = await db.all(sql, args)
-    const data = rows.map((r,i)=>({ rank: i+1, attempt_id: r.attempt_id, name: r.name, score: r.score, when: r.created_at }))
+
+    const data = rows.map((r, i) => ({
+      rank: i + 1,
+      username: r.username,
+      best_score: r.best_score,
+      best_quiz: r.best_quiz
+    }))
+
     res.json(data)
-  }catch(e){
+  } catch (e) {
     res.status(500).json({ error: e.message })
   }
 }
 
-export async function myRank(req,res){
-  try{
+
+
+// Rank user login
+// Rank user login (harus konsisten dengan leaderboard)
+// gantikan seluruh fungsi myRank dengan ini
+export async function myRank(req, res) {
+  try {
     const db = getDb()
-    const { id } = req.user
-    const total = await db.get('SELECT COUNT(*) as c FROM attempts WHERE user_id IS NOT NULL')
-    const rows = await db.all(`
-      SELECT a.id as attempt_id, a.score, a.created_at
-      FROM attempts a WHERE a.user_id = ? ORDER BY a.score DESC, a.created_at ASC
-    `, [id])
-    if(rows.length === 0) return res.json({ username: req.user.username, rank: null, total_entries: total.c })
-    const bestScore = rows[0].score
-    // compute rank among all attempts by score
-    const higher = await db.get('SELECT COUNT(*) as c FROM attempts WHERE score > ? AND user_id IS NOT NULL', [bestScore])
-    const rank = higher.c + 1
-    res.json({ username: req.user.username, best_score: bestScore, rank, total_entries: total.c })
-  }catch(e){
+    if (!req.user) return res.status(401).json({ error: 'auth required' })
+
+    const { quizId } = req.query
+    const args = []
+
+    const sql = `
+      WITH best_attempt AS (
+        SELECT a.user_id, a.quiz_id, MAX(a.score) AS best_score
+        FROM attempts a
+        ${quizId ? 'WHERE a.quiz_id = ?' : ''}
+        GROUP BY a.user_id ${quizId ? ', a.quiz_id' : ''}
+      )
+      SELECT u.id as user_id,
+             u.username,
+             q.title AS best_quiz,
+             b.best_score
+      FROM best_attempt b
+      JOIN users u ON u.id = b.user_id
+      JOIN quizzes q ON q.id = b.quiz_id
+      ORDER BY b.best_score DESC, u.username ASC
+    `
+    if (quizId) args.push(quizId)
+
+    const rows = await db.all(sql, args)
+
+    const idx = rows.findIndex(r => r.user_id === req.user.id)
+
+    // hitung total entries user
+    const totalQ = `
+      SELECT COUNT(*) as c
+      FROM attempts
+      WHERE user_id = ?
+      ${quizId ? 'AND quiz_id = ?' : ''}
+    `
+    const total = await db.get(totalQ, quizId ? [req.user.id, quizId] : [req.user.id])
+
+    if (idx === -1) {
+      return res.json({
+        username: req.user.username,
+        best_score: null,
+        best_quiz: null,
+        rank: null,
+        total_entries: total.c
+      })
+    }
+
+    const row = rows[idx]
+    const rank = idx + 1
+
+    res.json({
+      username: row.username,
+      best_score: row.best_score,
+      best_quiz: row.best_quiz,
+      rank,
+      total_entries: total.c
+    })
+  } catch (e) {
     res.status(500).json({ error: e.message })
   }
 }
